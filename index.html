@@ -36,6 +36,7 @@ p{margin:0}
 button{font:inherit;color:inherit;cursor:pointer;touch-action:manipulation}
 .btn{border:1px solid var(--line);background:var(--surface);border-radius:var(--r);padding:10px 16px;min-height:44px;font-weight:600;font-size:14px}
 .btn:hover{background:var(--surface-2)}
+a.btn{display:inline-flex;align-items:center;text-decoration:none;color:inherit}
 .btn.primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
 .btn.primary:hover{filter:brightness(1.08)}
 .btn.danger{color:var(--bad);border-color:var(--bad)}
@@ -241,6 +242,8 @@ function statusOf(q, r){ return !answered(q, r) ? 'blank' : isRight(q, r) ? 'rig
 function showAns(q, r){ if(!answered(q, r)) return '<span class="muted">Not answered</span>'; return q.t === 'mcq' ? letter(r.ans) : esc(r.ans); }
 function showKey(q){ return q.t === 'mcq' ? letter(q.a) : String(q.a); }
 const isOpen = t => todayDay() >= t.day;
+const HOSTED = !!window.SPRINT_SW;
+const pdfLink = (t, label) => HOSTED ? `<a class="btn" href="notes/${t.id}.pdf" target="_blank" rel="noopener" download="Sprint60-Day-${t.day}-notes.pdf">${label}</a>` : '';
 function attemptsOf(id){ return db.attempts.filter(a => a.testId === id); }
 function streak(){
   const days = new Set(db.attempts.map(a => dayKey(a.finishedAt))); let n = 0; const d = new Date();
@@ -314,7 +317,7 @@ function renderHome(){
       <div class="muted small num">${t.questions.length} questions · ${t.minutes} minutes · ${t.questions.length*4} marks · +4 correct, −1 wrong</div>
       <div class="chips">${SUBJECTS.map(s => `<span class="pill plain">${s}: ${esc(t.chapters[s])}</span>`).join('')}</div></div>
       <div class="row">${last ? `<button class="btn" data-result="${last.id}">Last result</button>` : ''}
-      ${isOpen(t) ? `<button class="btn" data-notes="${t.id}">Study notes</button><button class="btn primary" data-start="${t.id}">${isLive ? 'Resume' : last ? 'Attempt again' : 'Start exam'}</button>` : '<button class="btn" disabled>Locked</button>'}</div></div>`; }).join('');
+      ${isOpen(t) ? `${pdfLink(t, 'Notes PDF')}<button class="btn" data-notes="${t.id}">Study notes</button><button class="btn primary" data-start="${t.id}">${isLive ? 'Resume' : last ? 'Attempt again' : 'Start exam'}</button>` : '<button class="btn" disabled>Locked</button>'}</div></div>`; }).join('');
   app.innerHTML = nav('home') + `
   <div class="dash"><div class="today"><div class="label">${td >= 1 && td <= 60 ? 'Day '+td+' of 60' : 'The 60-day sprint'}${next.day === td ? ' · today\'s exam' : ''}</div>
       <h2>${esc(next.title)}</h2>
@@ -339,7 +342,7 @@ function renderNotes(){
   const t = testById(view.testId); if(!t || !isOpen(t)){ go('home'); return; }
   const sub = view.sub || 'Physics';
   app.innerHTML = nav('home') + `<div class="row spread"><div><div class="label">Day ${t.day} · ${esc(t.date)} · study notes</div><h2>${esc(t.chapters[sub])}</h2></div>
-    <div class="row"><button class="btn" data-go="home">Back</button><button class="btn primary" id="toexam">Go to the exam</button></div></div>
+    <div class="row"><button class="btn" data-go="home">Back</button>${pdfLink(t, 'Download as PDF')}<button class="btn primary" id="toexam">Go to the exam</button></div></div>
   <div class="tabs">${SUBJECTS.map(s => `<button class="tab" aria-selected="${s===sub}" data-nsub="${s}">${s}</button>`).join('')}</div>
   <div class="panel"><div class="notes">${(t.notes && t.notes[sub]) || '<p class="muted">Notes for this chapter are not loaded yet.</p>'}</div></div>
   <div class="row spread"><span class="muted small">Read all three chapters before the exam: Physics 75 minutes, Maths 75, Chemistry 60.</span>
