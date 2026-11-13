@@ -94,6 +94,7 @@ label.f{display:flex;flex-direction:column;gap:5px;font-size:13px;font-weight:60
 .examgrid{display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:18px;align-items:start}
 @media (max-width:820px){.examgrid,.dash{grid-template-columns:minmax(0,1fr)}.testcard{grid-template-columns:minmax(0,1fr)}.map{grid-template-columns:repeat(10,minmax(0,1fr))}}
 .qtext{font-size:17px;line-height:1.65;overflow-x:auto}
+.chaprow{padding:10px 0;border-top:1px solid var(--line)}
 .qimg{display:block;max-width:100%;height:auto;background:#fff;border:1px solid var(--line);border-radius:var(--r);padding:10px;box-sizing:border-box}
 .opt{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;align-items:center;border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;min-height:52px;background:var(--surface);text-align:left;width:100%;font-size:16px}
 button.opt:hover{background:var(--surface-2)}
@@ -216,7 +217,12 @@ let attTimer = null;
 function saveAttemptSoon(att){ saveLocal(); if(!Cloud.user) return; clearTimeout(attTimer); attTimer = setTimeout(() => saveAttempt(att), 1500); }
 
 /* ---------- helpers ---------- */
-const testById = id => TESTS.find(t => t.id === id);
+// Every chapter of every day is also a small exam of its own, so chapters can be done in any order.
+const CHAPS = [];
+TESTS.filter(t => !t.mock).forEach(t => SUBJECTS.forEach(s => CHAPS.push({id:t.id+'-'+s[0], day:t.day, chapter:true, parent:t.id, sub:s, title:s+': '+t.chapters[s], date:t.date, minutes:25, chapters:t.chapters, notes:t.notes, questions:t.questions.filter(q => q.s === s)})));
+const ALL = TESTS.concat(CHAPS);
+const subjOf = t => SUBJECTS.filter(s => t.questions.some(q => q.s === s));
+const testById = id => ALL.find(t => t.id === id);
 const fmt = s => { s = Math.max(0, Math.round(s)); const m = Math.floor(s/60), r = s%60; return String(m).padStart(2,'0')+':'+String(r).padStart(2,'0'); };
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const letter = i => 'ABCD'[i];
@@ -243,9 +249,9 @@ function statusOf(q, r){ return !answered(q, r) ? 'blank' : isRight(q, r) ? 'rig
 function showAns(q, r){ if(!answered(q, r)) return '<span class="muted">Not answered</span>'; return q.t === 'mcq' ? letter(r.ans) : esc(r.ans); }
 function showKey(q){ return q.t === 'mcq' ? letter(q.a) : String(q.a); }
 const PREVIEW = /[?&]preview=1/.test(location.search);
-const isOpen = t => PREVIEW || todayDay() >= t.day;
+const isOpen = t => true;   // nothing is locked: he picks the chapters his coaching has covered
 const HOSTED = !!window.SPRINT_SW;
-const pdfLink = (t, label) => HOSTED ? `<a class="btn" href="notes/${t.id}.pdf" target="_blank" rel="noopener" download="Sprint60-Day-${t.day}-notes.pdf">${label}</a>` : '';
+const pdfLink = (t, label) => HOSTED ? `<a class="btn" href="notes/${t.parent||t.id}.pdf" target="_blank" rel="noopener" download="Sprint60-Day-${t.day}-notes.pdf">${label}</a>` : '';
 function attemptsOf(id){ return db.attempts.filter(a => a.testId === id); }
 function streak(){
   const days = new Set(db.attempts.map(a => dayKey(a.finishedAt))); let n = 0; const d = new Date();
@@ -261,7 +267,7 @@ function nav(active){
   <div class="tabs" role="tablist">${tabs.map(([k,l]) => `<button class="tab" role="tab" aria-selected="${k===active}" data-go="${k}">${l}</button>`).join('')}</div></div>
   <div class="row spread small muted"><span>${Cloud.user ? 'Signed in as <b>'+esc(me.name)+'</b>' : 'Not signed in'} · <span id="sync">${syncLabel()}</span></span>
   ${Cloud.user ? '<button class="linkbtn" id="signout">Sign out</button>' : Cloud.on ? '<button class="linkbtn" id="signin">Sign in to sync across devices</button>' : ''}</div>
-  ${PREVIEW ? '<div class="notice">Preview mode: every day is unlocked so you can check the notes and exams. Students using the normal link see each day open on its date.</div>' : ''}
+
   ${storageOK ? '' : '<div class="notice">This browser is not saving data. Open the page in a normal (not private) window.</div>'}`;
 }
 function wireNav(){
@@ -303,38 +309,50 @@ function renderAuth(){
 function renderHome(){
   const td = todayDay();
   const open = TESTS.filter(isOpen);
-  const next = TESTS.find(t => db.live && db.live.testId === t.id) || open.find(t => t.day === td) || open.slice().reverse().find(t => !attemptsOf(t.id).length) || open[open.length-1] || TESTS[0];
+  const next = ALL.find(t => db.live && db.live.testId === t.id) || open.find(t => t.day === td) || open.slice().reverse().find(t => !attemptsOf(t.id).length) || open[open.length-1] || TESTS[0];
   const locked = !isOpen(next);
   const live = db.live && db.live.testId === next.id; const done = attemptsOf(next.id).length;
-  const firsts = TESTS.map(t => { const a = attemptsOf(t.id)[0]; return a ? grade(t, a.resp) : null; }).filter(Boolean);
+  const firsts = ALL.map(t => { const a = attemptsOf(t.id)[0]; return a ? grade(t, a.resp) : null; }).filter(Boolean);
   const avg = firsts.length ? Math.round(100*firsts.reduce((s,g) => s+g.score, 0)/firsts.reduce((s,g) => s+g.max, 0)) : null;
   const openErr = db.attempts.reduce((n,a) => { const t = testById(a.testId); return t ? n + t.questions.filter((q,i) => statusOf(q,a.resp[i]) !== 'right' && !(a.fixed && a.fixed[i])).length : n; }, 0);
+  const chapDone = (t, s) => attemptsOf(t.id).length || attemptsOf(t.id+'-'+s[0]).length;
+  const days = TESTS.filter(t => !t.mock);
+  const nDone = days.reduce((n,t) => n + SUBJECTS.filter(s => chapDone(t,s)).length, 0) + TESTS.filter(t => t.mock && attemptsOf(t.id).length).length;
+  const dayGrade = t => { const a = attemptsOf(t.id)[0]; if(a) return grade(t, a.resp); if(t.mock) return null;
+    const gs = SUBJECTS.map(s => { const c = testById(t.id+'-'+s[0]), ca = attemptsOf(c.id)[0]; return ca ? grade(c, ca.resp) : null; });
+    return gs.every(Boolean) ? {score:gs.reduce((x,g) => x+g.score, 0), max:gs.reduce((x,g) => x+g.max, 0)} : null; };
+  const chapRow = c => { const atts = attemptsOf(c.id), last = atts[atts.length-1], g = atts[0] ? grade(c, atts[0].resp) : null, isLive = db.live && db.live.testId === c.id, inDay = attemptsOf(c.parent).length;
+    return `<div class="row spread chaprow"><div><b>${esc(c.chapters[c.sub])}</b> <span class="muted small num">· plan day ${c.day}</span>
+      ${isLive ? '<span class="pill warn">In progress</span>' : g ? `<span class="pill ${g.score>=g.max/2?'good':'plain'} num">First attempt ${g.score} / ${g.max}</span>` : inDay ? '<span class="pill plain">Done in the day exam</span>' : ''}</div>
+      <div class="row">${last ? `<button class="btn" data-result="${last.id}">Last result</button>` : ''}<button class="btn" data-notes="${c.id}">Notes</button><button class="btn primary" data-start="${c.id}">${isLive ? 'Resume' : last ? 'Again' : 'Exam'}</button></div></div>`; };
+  const picker = SUBJECTS.map(s => `<div class="stack" style="gap:0"><div class="label" style="margin:10px 0 2px">${s}</div>${CHAPS.filter(c => c.sub === s).map(chapRow).join('')}</div>`).join('');
   const cells = Array.from({length:60}, (_,k) => { const d = k+1, t = TESTS.find(x => x.day === d); let c = '', tip = 'Day '+d;
-    if(t && isOpen(t)){ const a = attemptsOf(t.id)[0]; if(a){ const g = grade(t, a.resp), p = g.score/g.max; c = p >= .75 ? 's4' : p >= .55 ? 's3' : p >= .35 ? 's2' : 's1'; tip += ': '+g.score+' / '+g.max; } else { c = 'open'; tip += ': exam ready'; } }
+    if(t && isOpen(t)){ const g = dayGrade(t); if(g){ const p = g.score/g.max; c = p >= .75 ? 's4' : p >= .55 ? 's3' : p >= .35 ? 's2' : 's1'; tip += ': '+g.score+' / '+g.max; } else { c = 'open'; tip += ': ready'; } }
     return `<div class="cell ${c} ${d===td?'now':''}" title="${tip}">${d}</div>`; }).join('');
   const cards = TESTS.map(t => { const atts = attemptsOf(t.id), first = atts[0], last = atts[atts.length-1], isLive = db.live && db.live.testId === t.id;
     const g = first ? grade(t, first.resp) : null;
     return `<div class="panel testcard"><div class="stack" style="gap:8px">
-      <div class="row"><h2>${esc(t.title)}</h2><span class="pill plain">${esc(t.date)}</span>
-      ${!isOpen(t) ? `<span class="pill plain">Opens ${esc(t.date)}</span>` : isLive ? '<span class="pill warn">In progress</span>' : g ? `<span class="pill ${g.score>=g.max/2?'good':'plain'} num">First attempt ${g.score} / ${g.max}</span>${atts.length>1?`<span class="pill plain num">${atts.length} attempts</span>`:''}` : '<span class="pill acc">Ready</span>'}</div>
+      <div class="row"><h2>${esc(t.title)}</h2><span class="pill plain">Planned ${esc(t.date)}</span>
+      ${isLive ? '<span class="pill warn">In progress</span>' : g ? `<span class="pill ${g.score>=g.max/2?'good':'plain'} num">First attempt ${g.score} / ${g.max}</span>${atts.length>1?`<span class="pill plain num">${atts.length} attempts</span>`:''}` : '<span class="pill acc">Ready</span>'}</div>
       <div class="muted small num">${t.questions.length} questions · ${t.minutes} minutes · ${t.questions.length*4} marks · +4 correct, −1 wrong</div>
       <div class="chips">${t.mock ? `<span class="pill plain">${esc(t.source)}</span>` : SUBJECTS.map(s => `<span class="pill plain">${s}: ${esc(t.chapters[s])}</span>`).join('')}</div></div>
       <div class="row">${last ? `<button class="btn" data-result="${last.id}">Last result</button>` : ''}
       ${isOpen(t) ? `${t.mock ? '' : pdfLink(t, 'Notes PDF') + `<button class="btn" data-notes="${t.id}">Study notes</button>`}<button class="btn primary" data-start="${t.id}">${isLive ? 'Resume' : last ? 'Attempt again' : 'Start exam'}</button>` : '<button class="btn" disabled>Locked</button>'}</div></div>`; }).join('');
   app.innerHTML = nav('home') + `
-  <div class="dash"><div class="today"><div class="label">${td >= 1 && td <= 60 ? 'Day '+td+' of 60' : 'The 60-day sprint'}${next.day === td ? ' · today\'s exam' : ''}</div>
+  <div class="dash"><div class="today"><div class="label">${td >= 1 && td <= 60 ? 'Day '+td+' of 60' : 'The 60-day sprint'}${next.chapter ? ' · chapter exam' : next.day === td ? ' · planned for today' : ''}</div>
       <h2>${esc(next.title)}</h2>
-      <div class="chipline">${next.mock ? `<span>${esc(next.source)}</span>` : SUBJECTS.map(s => `<span>${esc(next.chapters[s])}</span>`).join('')}</div>
-      <p style="opacity:.8" class="num">${next.mock ? 'A full paper under exam conditions: ' : 'Study notes for three chapters, then '}${next.questions.length} questions in ${next.minutes} minutes</p>
+      <div class="chipline">${next.mock ? `<span>${esc(next.source)}</span>` : subjOf(next).map(s => `<span>${esc(next.chapters[s])}</span>`).join('')}</div>
+      <p style="opacity:.8" class="num">${next.mock ? 'A full paper under exam conditions: ' : next.chapter ? 'Study notes for this chapter, then ' : 'Study notes for three chapters, then '}${next.questions.length} questions in ${next.minutes} minutes</p>
       ${locked ? `<p><b>Opens on ${esc(next.date)}.</b> ${next.mock ? 'The mock unlocks on the day.' : 'Notes and exam unlock together on the day.'}</p>` : `<div class="row">${next.mock ? '' : `<button class="btn" style="background:transparent;color:inherit;border-color:currentColor" data-notes="${next.id}">Read the study notes</button>`}<button class="btn primary" data-start="${next.id}">${live ? 'Resume where you stopped' : done ? 'Attempt again' : 'Start the exam'}</button></div>`}</div>
     <div class="panel stack"><div class="stats">
       <div class="stat"><span class="label">Day streak</span><b>${streak()}</b></div>
-      <div class="stat"><span class="label">Exams done</span><b>${firsts.length}<span class="muted" style="font-size:14px"> / 60</span></b></div>
+      <div class="stat"><span class="label">Chapters done</span><b>${nDone}<span class="muted" style="font-size:14px"> / ${days.length*3 + TESTS.length - days.length}</span></b></div>
       <div class="stat"><span class="label">Average score</span><b>${avg === null ? '–' : avg+'%'}</b></div>
       <div class="stat"><span class="label">Errors to fix</span><b>${openErr}</b></div></div>
       <p class="small muted">The streak counts days in a row with at least one finished exam. Errors to fix drops as you clear questions in Retry my mistakes.</p></div></div>
   <div class="panel stack"><div class="row spread"><h2>The 60 days</h2><div class="row small muted"><span class="pill acc">Ready</span><span class="pill bad">Under 35%</span><span class="pill warn">35–54%</span><span class="pill good">55% and above</span></div></div><div class="map">${cells}</div></div>
-  <h2>All days</h2>${cards}`;
+  <div class="panel stack"><h2>Pick a chapter</h2><p class="muted">Nothing is locked. Choose the chapters your coaching has covered: read the notes, then take the 10-question exam (25 minutes). The plan day shows where the chapter sits in the suggested order.</p>${picker}</div>
+  <h2>Full day exams</h2><p class="muted">Three chapters together, as planned for each day, and the full mocks. Use these when all three chapters of a day are covered.</p>${cards}`;
   app.querySelectorAll('[data-notes]').forEach(b => b.onclick = () => go('notes', {testId:b.dataset.notes}));
   app.querySelectorAll('[data-start]').forEach(b => b.onclick = () => { if(db.live && db.live.testId === b.dataset.start) go('exam'); else go('intro', {testId:b.dataset.start}); });
   app.querySelectorAll('[data-result]').forEach(b => b.onclick = () => go('result', {attemptId:b.dataset.result}));
@@ -343,13 +361,13 @@ function renderHome(){
 /* ---------- instructions ---------- */
 function renderNotes(){
   const t = testById(view.testId); if(!t || !isOpen(t)){ go('home'); return; }
-  const sub = view.sub || 'Physics';
+  const ss = subjOf(t); const sub = ss.includes(view.sub) ? view.sub : ss[0];
   app.innerHTML = nav('home') + `<div class="row spread"><div><div class="label">Day ${t.day} · ${esc(t.date)} · study notes</div><h2>${esc(t.chapters[sub])}</h2></div>
     <div class="row"><button class="btn" data-go="home">Back</button>${pdfLink(t, 'Download as PDF')}<button class="btn primary" id="toexam">Go to the exam</button></div></div>
-  <div class="tabs">${SUBJECTS.map(s => `<button class="tab" aria-selected="${s===sub}" data-nsub="${s}">${s}</button>`).join('')}</div>
+  ${ss.length > 1 ? `<div class="tabs">${ss.map(s => `<button class="tab" aria-selected="${s===sub}" data-nsub="${s}">${s}</button>`).join('')}</div>` : ''}
   <div class="panel"><div class="notes">${(t.notes && t.notes[sub]) || '<p class="muted">Notes for this chapter are not loaded yet.</p>'}</div></div>
-  <div class="row spread"><span class="muted small">Read all three chapters before the exam: Physics 75 minutes, Maths 75, Chemistry 60.</span>
-    ${SUBJECTS.indexOf(sub) < 2 ? `<button class="btn primary" data-nsub="${SUBJECTS[SUBJECTS.indexOf(sub)+1]}">Next: ${SUBJECTS[SUBJECTS.indexOf(sub)+1]}</button>` : '<button class="btn primary" id="toexam2">Go to the exam</button>'}</div>`;
+  <div class="row spread"><span class="muted small">${t.chapter ? 'Read the chapter, then take its 10-question exam.' : 'Read all three chapters before the exam: Physics 75 minutes, Maths 75, Chemistry 60.'}</span>
+    ${ss.indexOf(sub) < ss.length-1 ? `<button class="btn primary" data-nsub="${ss[ss.indexOf(sub)+1]}">Next: ${ss[ss.indexOf(sub)+1]}</button>` : '<button class="btn primary" id="toexam2">Go to the exam</button>'}</div>`;
   app.querySelectorAll('[data-nsub]').forEach(b => b.onclick = () => go('notes', {testId:t.id, sub:b.dataset.nsub}));
   const ex = () => { if(db.live && db.live.testId === t.id) go('exam'); else go('intro', {testId:t.id}); };
   $('#toexam').onclick = ex; const e2 = $('#toexam2'); if(e2) e2.onclick = ex;
@@ -360,10 +378,10 @@ function renderIntro(){
   <table><tbody>
   ${t.mock ? `<tr><td>This paper</td><td>${esc(t.source)}. Sit it in one go, at a desk, with the timer running.</td></tr>
   <tr><td>Questions</td><td class="num">${t.questions.length}: 25 per subject, 20 single-choice and 5 numerical. Questions 1 to 25 are Maths, 26 to 50 Physics, 51 to 75 Chemistry. Each question is shown as printed in the paper, so pick the option letter that matches.</td></tr>`
-  : `<tr><td>Questions</td><td class="num">${t.questions.length}: 10 per subject, 8 single-choice and 2 numerical</td></tr>`}
+  : `<tr><td>Questions</td><td class="num">${t.chapter ? `${t.questions.length}, all from ${esc(t.chapters[t.sub])}: 8 single-choice and 2 numerical` : `${t.questions.length}: 10 per subject, 8 single-choice and 2 numerical`}</td></tr>`}
   <tr><td>Time</td><td class="num">${t.minutes} minutes. The exam submits itself when the clock reaches zero.</td></tr>
   <tr><td>Marking</td><td class="num">+4 correct, −1 wrong, 0 blank. Numerical questions are marked the same way.</td></tr>
-  <tr><td>Order</td><td>Any order. Chemistry first, then Physics, then Maths is recommended.</td></tr>
+  ${t.chapter ? '' : '<tr><td>Order</td><td>Any order. Chemistry first, then Physics, then Maths is recommended.</td></tr>'}
   <tr><td>I'm guessing</td><td>Switch this on whenever you answer without being sure. The result shows what your guesses earned or cost.</td></tr>
   <tr><td>Rough work</td><td>Opens a sheet under the question for working with a finger or Apple Pencil. Paper is fine too.</td></tr>
   </tbody></table>
@@ -387,7 +405,7 @@ function renderExam(){
   app.innerHTML = `<div class="exambar"><div><div class="label">${esc(t.title)}</div><b>${esc(q.s)}</b> <span class="muted">· ${esc(t.chapters[q.s])}</span></div>
     <div class="row"><div><div class="label">Time left</div><div class="clock ${L.remaining<300?'low':''}" id="clock">${fmt(L.remaining)}</div></div><button class="btn primary" id="submit">Submit exam</button></div></div>
   <div class="examgrid"><div class="stack">
-    <div class="tabs">${SUBJECTS.map(s => `<button class="tab" aria-selected="${s===q.s}" data-sub="${s}">${s}</button>`).join('')}</div>
+    ${t.chapter ? '' : `<div class="tabs">${SUBJECTS.map(s => `<button class="tab" aria-selected="${s===q.s}" data-sub="${s}">${s}</button>`).join('')}</div>`}
     <div class="panel stack">
       <div class="row spread"><h2 class="num">Question ${L.cur+1} <span class="muted" style="font-weight:500">of ${t.questions.length}</span></h2>
         <div class="row"><span class="pill plain">${q.t==='mcq'?'Single correct option':'Numerical answer'}</span><span class="pill plain num">+4 / −1</span>${r.marked?'<span class="pill mark">Marked for review</span>':''}</div></div>
@@ -401,7 +419,7 @@ function renderExam(){
       <div class="row"><button class="btn mark" id="mark">${r.marked?'Unmark':'Mark for review'} and next</button><button class="btn primary" id="next">Save and next</button></div></div>
   </div>
   <div class="panel stack"><h3>Question palette</h3>
-    ${SUBJECTS.map(s => `<div class="stack" style="gap:6px"><div class="label">${s}</div><div class="pal">${t.questions.map((qq,i) => qq.s===s ? `<button class="pb ${pal(i)} ${i===L.cur?'cur':''}" data-q="${i}" aria-label="Question ${i+1}">${i+1}</button>` : '').join('')}</div></div>`).join('')}
+    ${subjOf(t).map(s => `<div class="stack" style="gap:6px"><div class="label">${s}</div><div class="pal">${t.questions.map((qq,i) => qq.s===s ? `<button class="pb ${pal(i)} ${i===L.cur?'cur':''}" data-q="${i}" aria-label="Question ${i+1}">${i+1}</button>` : '').join('')}</div></div>`).join('')}
     <div class="legend"><span class="pb ans"></span><span>Answered (<b class="num">${counts.ans}</b>)</span><span class="pb seen"></span><span>Seen, not answered (<b class="num">${counts.seen}</b>)</span>
     <span class="pb mk"></span><span>Marked for review (<b class="num">${counts.mk}</b>)</span><span class="pb"></span><span>Not seen (<b class="num">${counts.none}</b>)</span></div></div></div>`;
   const captureNum = () => { const el = $('#numans'); if(el){ const v = el.value.trim(); r.ans = v === '' ? null : v; } };
@@ -496,7 +514,7 @@ function renderResult(){
     <p class="muted small">${esc(t.keyNote||'')}</p></div>` : ''}
   ${insights.length ? `<div class="panel stack"><h2>What this attempt shows</h2>${insights.map(x => `<p>${x}</p>`).join('')}</div>` : ''}
   <div class="panel stack"><h2>Subject-wise</h2><div class="scroll"><table><thead><tr><th>Subject</th><th>Chapter</th><th class="r">Correct</th><th class="r">Wrong</th><th class="r">Skipped</th><th class="r">Score</th><th class="r">Time</th></tr></thead><tbody>
-    ${SUBJECTS.map(s => { const b = g.bySubject[s]; return `<tr><td><b>${s}</b></td><td>${esc(t.chapters[s])}</td><td class="r num">${b.right}</td><td class="r num">${b.wrong}</td><td class="r num">${b.blank}</td><td class="r num"><b>${b.score}</b> / ${b.n*4}</td><td class="r num">${fmt(b.time)}</td></tr>`; }).join('')}
+    ${subjOf(t).map(s => { const b = g.bySubject[s]; return `<tr><td><b>${s}</b></td><td>${esc(t.chapters[s])}</td><td class="r num">${b.right}</td><td class="r num">${b.wrong}</td><td class="r num">${b.blank}</td><td class="r num"><b>${b.score}</b> / ${b.n*4}</td><td class="r num">${fmt(b.time)}</td></tr>`; }).join('')}
   </tbody></table></div></div>
   <div class="panel stack"><h2>Your answers against the correct answers</h2><p class="muted small">Tap a row to open that question with its solution.</p>
   <div class="scroll"><table><thead><tr><th>Q</th><th>Subject</th><th>Topic</th><th>Your answer</th><th>Correct</th><th>Result</th><th class="r">Marks</th><th class="r">Time</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
@@ -533,7 +551,7 @@ function renderReview(){
       <p class="muted small">This goes into the error log. Redo the question on paper before moving on.</p></div>`}
   </div>
   <div class="panel stack"><h3>All questions</h3>
-    ${SUBJECTS.map(s => `<div class="stack" style="gap:6px"><div class="label">${s}</div><div class="pal">${t.questions.map((qq,k) => qq.s===s ? `<button class="pb ${statusOf(qq, att.resp[k])==='right'?'right':statusOf(qq, att.resp[k])==='wrong'?'wrong':''} ${k===i?'cur':''}" data-jump="${k}" aria-label="Question ${k+1}">${k+1}</button>` : '').join('')}</div></div>`).join('')}
+    ${subjOf(t).map(s => `<div class="stack" style="gap:6px"><div class="label">${s}</div><div class="pal">${t.questions.map((qq,k) => qq.s===s ? `<button class="pb ${statusOf(qq, att.resp[k])==='right'?'right':statusOf(qq, att.resp[k])==='wrong'?'wrong':''} ${k===i?'cur':''}" data-jump="${k}" aria-label="Question ${k+1}">${k+1}</button>` : '').join('')}</div></div>`).join('')}
     <div class="legend"><span class="pb right"></span><span>Correct</span><span class="pb wrong"></span><span>Wrong</span><span class="pb"></span><span>Skipped</span></div></div></div>`;
   $('#back').onclick = () => go('result', {attemptId:att.id});
   $('#filt').onchange = e => { view.filter = e.target.value; renderReview(); wireNav(); };
@@ -608,7 +626,7 @@ function myRow(testId){
 }
 function postScores(testId){
   if(!Cloud.user || !me.squads.length) return;
-  const ids = testId ? [testId] : TESTS.map(t => t.id);
+  const ids = testId ? [testId] : ALL.map(t => t.id);
   me.squads.forEach(code => ids.forEach(id => { const row = myRow(id); if(row) cloudWrite(Cloud.fs.collection('squads').doc(code).collection('scores').doc(Cloud.user.uid+'_'+id).set(row)); }));
 }
 function newCode(){ const a = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let s = ''; for(let i=0;i<6;i++) s += a[Math.floor(Math.random()*a.length)]; return s; }
@@ -636,7 +654,7 @@ function renderSquad(){
     <form class="panel stack" id="newf"><h2>Start a squad</h2><label class="f" for="sname">Squad name<input type="text" id="sname" maxlength="40" placeholder="For example: Jodhpur droppers" required></label>
       <button class="btn" type="submit">Create and get a code</button></form></div>
   ${me.squads.length ? `<div class="panel stack"><div class="row spread"><h2>Ranking</h2><div class="row"><label class="small muted" for="sq">Squad</label><select id="sq">${me.squads.map(c => `<option value="${c}" ${c===sel?'selected':''}>${c}</option>`).join('')}</select>
-      <label class="small muted" for="tx">Exam</label><select id="tx"><option value="all">All exams</option>${TESTS.map(t => `<option value="${t.id}" ${view.test===t.id?'selected':''}>${esc(t.title)}</option>`).join('')}</select></div></div>
+      <label class="small muted" for="tx">Exam</label><select id="tx"><option value="all">All exams</option>${ALL.map(t => `<option value="${t.id}" ${view.test===t.id?'selected':''}>${esc(t.title)}</option>`).join('')}</select></div></div>
       <div id="board"><p class="muted">Loading the ranking…</p></div></div>` : '<p class="muted">You are not in a squad yet. Start one and send the code to your friends, or join theirs.</p>'}`;
   $('#joinf').onsubmit = async e => { e.preventDefault(); const code = $('#jcode').value.trim().toUpperCase(); const er = $('#jerr');
     try{ await joinSquad(code); go('squad', {code}); }catch(x){ er.textContent = x.message === 'none' ? 'No squad has that code.' : 'Could not join. Check your connection.'; er.hidden = false; } };
