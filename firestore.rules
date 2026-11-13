@@ -1,11 +1,18 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Each student's profile, attempts and in-progress exam are private to them.
+    // The super admin can read every student's results but cannot change them.
+    // Replace the address below with the admin account's email in the Firebase console copy of these rules.
+    function isAdmin() {
+      return request.auth != null && request.auth.token.email == 'SUPER_ADMIN_EMAIL';
+    }
+    // Each student's profile, attempts and in-progress exam are private to them (and readable by the super admin).
     match /users/{uid} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
+      allow read: if request.auth != null && (request.auth.uid == uid || isAdmin());
+      allow write: if request.auth != null && request.auth.uid == uid;
       match /{document=**} {
-        allow read, write: if request.auth != null && request.auth.uid == uid;
+        allow read: if request.auth != null && (request.auth.uid == uid || isAdmin());
+        allow write: if request.auth != null && request.auth.uid == uid;
       }
     }
     // A squad can be read by any signed-in student who knows its code. Joining may only change the member list.
@@ -20,7 +27,7 @@ service cloud.firestore {
       // Scores are visible to squad members only; each student writes only their own rows.
       match /scores/{scoreId} {
         allow read: if request.auth != null
-          && request.auth.uid in get(/databases/$(database)/documents/squads/$(code)).data.members;
+          && (isAdmin() || request.auth.uid in get(/databases/$(database)/documents/squads/$(code)).data.members);
         allow write: if request.auth != null
           && request.resource.data.uid == request.auth.uid
           && scoreId.matches(request.auth.uid + '_.*')

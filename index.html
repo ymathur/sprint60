@@ -164,12 +164,14 @@ let db = {attempts:[], live:null};
 let me = {name:'', squads:[]};
 let view = {name:'home'};
 let timer = null;
+const Admin = {is:false, rows:null};     // the super admin can read every student's results (enforced by the database rules)
+let VIEWAS = null, own = null;           // set while the admin is looking at one student's account, read-only
 const Cloud = {configured: !!window.FIREBASE_CONFIG, on:false, user:null, fs:null, auth:null, status:'local'};
 
 /* ---------- storage: this device ---------- */
 function lkey(){ return LKEY + (Cloud.user ? ':' + Cloud.user.uid : ''); }
 function loadLocal(){ try{ const raw = localStorage.getItem(lkey()); if(raw){ const d = JSON.parse(raw); return {attempts:d.attempts||[], live:d.live||null}; } }catch(e){ storageOK = false; } return {attempts:[], live:null}; }
-function saveLocal(){ try{ localStorage.setItem(lkey(), JSON.stringify(db)); }catch(e){ storageOK = false; } }
+function saveLocal(){ if(VIEWAS) return; try{ localStorage.setItem(lkey(), JSON.stringify(db)); }catch(e){ storageOK = false; } }
 
 /* ---------- storage: cloud (Firebase) ---------- */
 function loadScript(src){ return new Promise((ok, no) => { const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = () => no(new Error('load '+src)); document.head.appendChild(s); }); }
@@ -194,6 +196,9 @@ async function pullAll(){
   const prof = await udoc().get();
   if(prof.exists){ const d = prof.data(); me = {name:d.name || u.displayName || 'Student', squads:d.squads || []}; }
   else { me = {name:u.displayName || (u.email||'Student').split('@')[0], squads:[]}; await udoc().set({name:me.name, squads:[], createdAt:Date.now()}); }
+  udoc().set({email:u.email || '', lastSeen:Date.now()}, {merge:true}).catch(() => {});
+  Admin.is = false; Admin.rows = null;
+  try{ await Cloud.fs.collection('users').get(); Admin.is = true; }catch(e){}      // only the super admin is allowed to list users
   const local = loadLocal();
   const snap = await udoc().collection('attempts').get(); const atts = []; snap.forEach(d => atts.push(d.data()));
   const have = new Set(atts.map(a => a.id));
@@ -206,15 +211,16 @@ async function pullAll(){
 }
 let liveTimer = null;
 function saveLive(now){
+  if(VIEWAS) return;
   if(db.live) db.live.savedAt = Date.now();
   saveLocal(); if(!Cloud.user) return;
   clearTimeout(liveTimer);
   const push = () => { const ref = udoc().collection('state').doc('live'); cloudWrite(db.live ? ref.set(clean(db.live)) : ref.delete()); };
   if(now) push(); else liveTimer = setTimeout(push, 2500);
 }
-function saveAttempt(att){ saveLocal(); if(Cloud.user) cloudWrite(udoc().collection('attempts').doc(att.id).set(clean(att))); }
+function saveAttempt(att){ if(VIEWAS) return; saveLocal(); if(Cloud.user) cloudWrite(udoc().collection('attempts').doc(att.id).set(clean(att))); }
 let attTimer = null;
-function saveAttemptSoon(att){ saveLocal(); if(!Cloud.user) return; clearTimeout(attTimer); attTimer = setTimeout(() => saveAttempt(att), 1500); }
+function saveAttemptSoon(att){ if(VIEWAS) return; saveLocal(); if(!Cloud.user) return; clearTimeout(attTimer); attTimer = setTimeout(() => saveAttempt(att), 1500); }
 
 /* ---------- helpers ---------- */
 // Every chapter of every day is also a small exam of its own, so chapters can be done in any order.
@@ -263,21 +269,27 @@ function streak(){
 /* ---------- shell ---------- */
 function nav(active){
   const tabs = [['home','Today'],['history','Past attempts'],['errors','Error log'],['squad','Squad']];
+  if(Admin.is) tabs.push(['admin','Admin']);
   return `<div class="topnav"><div class="brand"><div class="logo">60</div><div><div class="label">JEE Main 2027 · 60-day sprint</div><h1>${esc(APP)}</h1></div></div>
   <div class="tabs" role="tablist">${tabs.map(([k,l]) => `<button class="tab" role="tab" aria-selected="${k===active}" data-go="${k}">${l}</button>`).join('')}</div></div>
-  <div class="row spread small muted"><span>${Cloud.user ? 'Signed in as <b>'+esc(me.name)+'</b>' : 'Not signed in'} · <span id="sync">${syncLabel()}</span></span>
+  <div class="row spread small muted"><span>${VIEWAS ? 'Super admin' : Cloud.user ? 'Signed in as <b>'+esc(me.name)+'</b>' : 'Not signed in'} · <span id="sync">${VIEWAS ? 'Read-only' : syncLabel()}</span></span>
   ${Cloud.user ? '<button class="linkbtn" id="signout">Sign out</button>' : Cloud.on ? '<button class="linkbtn" id="signin">Sign in to sync across devices</button>' : ''}</div>
 
+  ${VIEWAS ? `<div class="notice row spread"><span>You are viewing <b>${esc(VIEWAS.name)}</b>'s account as super admin. It is read-only: nothing you tap here is saved or changes their results.</span><button class="btn" id="exitview">Back to the admin list</button></div>` : ''}
+  <div class="notice" id="flash" hidden></div>
   ${storageOK ? '' : '<div class="notice">This browser is not saving data. Open the page in a normal (not private) window.</div>'}`;
 }
 function wireNav(){
-  const so = $('#signout'); if(so) so.onclick = () => { try{ localStorage.removeItem('sprint60-guest'); }catch(e){} Cloud.auth.signOut(); };
+  const ev = $('#exitview'); if(ev) ev.onclick = exitView;
+  const so = $('#signout'); if(so) so.onclick = () => { if(VIEWAS){ db = own.db; me = own.me; VIEWAS = null; } try{ localStorage.removeItem('sprint60-guest'); }catch(e){} Cloud.auth.signOut(); };
   const si = $('#signin'); if(si) si.onclick = () => { try{ localStorage.removeItem('sprint60-guest'); }catch(e){} go('auth'); };
 }
-function go(name, extra){ stopTimer(); view = Object.assign({name}, extra || {}); render(); window.scrollTo(0,0); }
+function go(name, extra){
+  if(VIEWAS && (name === 'intro' || name === 'exam' || name === 'retry')){ const f = $('#flash'); if(f){ f.textContent = 'Read-only: exams cannot be taken while viewing a student\'s account.'; f.hidden = false; window.scrollTo(0,0); } return; }
+  stopTimer(); view = Object.assign({name}, extra || {}); render(); window.scrollTo(0,0); }
 function render(){
   const v = view.name;
-  ({home:renderHome, auth:renderAuth, notes:renderNotes, intro:renderIntro, exam:renderExam, result:renderResult, review:renderReview, retry:renderRetry, history:renderHistory, errors:renderErrors, squad:renderSquad}[v] || renderHome)();
+  ({home:renderHome, auth:renderAuth, notes:renderNotes, intro:renderIntro, exam:renderExam, result:renderResult, review:renderReview, retry:renderRetry, history:renderHistory, errors:renderErrors, squad:renderSquad, admin:renderAdmin}[v] || renderHome)();
   wireNav();
 }
 app.addEventListener('click', e => { const b = e.target.closest('[data-go]'); if(b) go(b.dataset.go); });
@@ -625,18 +637,20 @@ function myRow(testId){
   return {uid:Cloud.user.uid, name:me.name, testId, score:f.score, max:f.max, right:f.right, wrong:f.wrong, used:atts[0].used, best, tries:atts.length, at:atts[0].finishedAt};
 }
 function postScores(testId){
-  if(!Cloud.user || !me.squads.length) return;
+  if(VIEWAS || !Cloud.user || !me.squads.length) return;
   const ids = testId ? [testId] : ALL.map(t => t.id);
   me.squads.forEach(code => ids.forEach(id => { const row = myRow(id); if(row) cloudWrite(Cloud.fs.collection('squads').doc(code).collection('scores').doc(Cloud.user.uid+'_'+id).set(row)); }));
 }
 function newCode(){ const a = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let s = ''; for(let i=0;i<6;i++) s += a[Math.floor(Math.random()*a.length)]; return s; }
 async function joinSquad(code){
+  if(VIEWAS) throw new Error('readonly');
   const ref = Cloud.fs.collection('squads').doc(code); const d = await ref.get(); if(!d.exists) throw new Error('none');
   if(!(d.data().members || []).includes(Cloud.user.uid)) await ref.update({members: firebase.firestore.FieldValue.arrayUnion(Cloud.user.uid)});
   if(!me.squads.includes(code)){ me.squads.push(code); await udoc().set({name:me.name, squads:me.squads}, {merge:true}); }
   postScores(null); return d.data();
 }
 async function createSquad(name){
+  if(VIEWAS) throw new Error('readonly');
   const code = newCode();
   await Cloud.fs.collection('squads').doc(code).set({name, owner:Cloud.user.uid, members:[Cloud.user.uid], createdAt:Date.now()});
   me.squads.push(code); await udoc().set({name:me.name, squads:me.squads}, {merge:true}); postScores(null); return code;
@@ -680,6 +694,46 @@ function renderSquad(){
 }
 
 /* ---------- start ---------- */
+/* ---------- super admin ---------- */
+function summarise(atts){
+  const by = id => atts.filter(a => a.testId === id);
+  const firsts = ALL.map(t => { const a = by(t.id)[0]; return a ? {t, g:grade(t, a.resp)} : null; }).filter(Boolean);
+  const days = TESTS.filter(t => !t.mock);
+  const done = days.reduce((n,t) => n + SUBJECTS.filter(s => by(t.id).length || by(t.id+'-'+s[0]).length).length, 0);
+  const chap = {};                                   // first-attempt marks per chapter, from day exams and chapter exams
+  firsts.forEach(({t, g}) => { if(t.mock) return; subjOf(t).forEach(s => { const k = s+': '+t.chapters[s], b = g.bySubject[s]; (chap[k] = chap[k] || {score:0, max:0}); chap[k].score += b.score; chap[k].max += b.n*4; }); });
+  const weak = Object.keys(chap).map(k => ({k, p:Math.round(100*chap[k].score/chap[k].max)})).filter(x => x.p < 60).sort((a,b) => a.p - b.p).slice(0,3);
+  const mock = firsts.filter(x => x.t.mock).pop();
+  const errors = atts.reduce((n,a) => { const t = testById(a.testId); return t ? n + t.questions.filter((q,i) => statusOf(q,a.resp[i]) !== 'right' && !(a.fixed && a.fixed[i])).length : n; }, 0);
+  return {done, total:days.length*3, exams:atts.length, avg: firsts.length ? Math.round(100*firsts.reduce((x,f) => x+f.g.score, 0)/firsts.reduce((x,f) => x+f.g.max, 0)) : null,
+    last: atts.reduce((m,a) => Math.max(m, a.finishedAt||0), 0), weak, mock: mock ? mock.g.score+' / '+mock.g.max : '', errors};
+}
+async function loadAdmin(){
+  const snap = await Cloud.fs.collection('users').get(); const users = []; snap.forEach(d => users.push({uid:d.id, p:d.data()}));
+  Admin.rows = await Promise.all(users.map(async u => {
+    const ref = Cloud.fs.collection('users').doc(u.uid); const atts = []; (await ref.collection('attempts').get()).forEach(d => atts.push(d.data()));
+    atts.sort((a,b) => a.finishedAt - b.finishedAt); const lv = await ref.collection('state').doc('live').get(); const live = lv.exists ? lv.data() : null;
+    return {uid:u.uid, name:u.p.name || 'Student', email:u.p.email || '', squads:u.p.squads || [], atts, live, sum:summarise(atts), seen:Math.max(u.p.lastSeen||0, live ? live.savedAt||0 : 0)};
+  }));
+  Admin.rows.sort((a,b) => Math.max(b.seen, b.sum.last) - Math.max(a.seen, a.sum.last));
+}
+function viewAs(uid){ const r = (Admin.rows||[]).find(x => x.uid === uid); if(!r) return; if(!VIEWAS) own = {db, me}; VIEWAS = {uid:r.uid, name:r.name}; db = {attempts:r.atts, live:r.live}; me = {name:r.name, squads:r.squads}; go('home'); }
+function exitView(){ if(VIEWAS){ db = own.db; me = own.me; VIEWAS = null; } go('admin'); }
+function ago(ts){ if(!ts) return 'Never'; const m = Math.floor((Date.now()-ts)/60000); return m < 1 ? 'Just now' : m < 60 ? m+' min ago' : m < 1440 ? Math.floor(m/60)+' h ago' : m < 2880 ? 'Yesterday' : Math.floor(m/1440)+' days ago'; }
+function renderAdmin(){
+  if(!Admin.is){ go('home'); return; }
+  if(VIEWAS){ db = own.db; me = own.me; VIEWAS = null; }
+  const body = !Admin.rows ? '<p class="muted">Loading every student\'s results…</p>' : !Admin.rows.length ? '<p class="muted">No one has signed up yet.</p>' : `<div style="overflow-x:auto"><table><thead><tr><th>Student</th><th>Last active</th><th class="r">Chapters done</th><th class="r">Exams taken</th><th class="r">Average</th><th class="r">Mock</th><th class="r">Errors to fix</th><th>Weakest chapters (first attempt)</th><th></th></tr></thead><tbody>
+    ${Admin.rows.map(r => `<tr><td><b>${esc(r.name)}</b>${r.email ? `<div class="muted small">${esc(r.email)}</div>` : ''}${r.live && testById(r.live.testId) ? `<div><span class="pill warn">In progress: ${esc(testById(r.live.testId).title)}</span></div>` : ''}</td>
+      <td class="num">${ago(Math.max(r.seen, r.sum.last))}</td><td class="r num">${r.sum.done} / ${r.sum.total}</td><td class="r num">${r.sum.exams}</td><td class="r num">${r.sum.avg === null ? '–' : r.sum.avg+'%'}</td><td class="r num">${r.sum.mock || '–'}</td><td class="r num">${r.sum.errors}</td>
+      <td class="small">${r.sum.weak.length ? r.sum.weak.map(w => `${esc(w.k)} <span class="muted num">${w.p}%</span>`).join('<br>') : '<span class="muted">–</span>'}</td>
+      <td><button class="btn" style="white-space:nowrap" data-viewas="${esc(r.uid)}">View as</button></td></tr>`).join('')}</tbody></table></div>`;
+  app.innerHTML = nav('admin') + `<div class="panel stack"><div class="row spread"><div><h2>All students</h2><p class="muted small">Only the super admin account sees this page. Average is the first-attempt score across all exams taken. Weakest chapters are those under 60% on the first attempt.</p></div><button class="btn" id="adminrefresh">Refresh</button></div>${body}</div>`;
+  app.querySelectorAll('[data-viewas]').forEach(b => b.onclick = () => viewAs(b.dataset.viewas));
+  const load = () => loadAdmin().then(() => { if(view.name === 'admin') render(); }).catch(() => { Admin.rows = []; if(view.name === 'admin') render(); });
+  $('#adminrefresh').onclick = () => { Admin.rows = null; render(); };
+  if(!Admin.rows) load();
+}
 function startLocal(){ Cloud.user = null; db = loadLocal(); me = {name:'', squads:[]}; go('home'); }
 async function start(){
   const ok = await bootCloud();
@@ -691,7 +745,7 @@ async function start(){
       try{ await pullAll(); if(view.pendingName && view.pendingName !== me.name){ me.name = view.pendingName; await udoc().set({name:me.name}, {merge:true}); } setStatus('ok'); }
       catch(e){ db = loadLocal(); setStatus('error'); }
       go('home'); }
-    else { Cloud.user = null; if(guest){ guest = false; startLocal(); } else { db = {attempts:[], live:null}; go('auth'); } }
+    else { Cloud.user = null; Admin.is = false; Admin.rows = null; VIEWAS = null; if(guest){ guest = false; startLocal(); } else { db = {attempts:[], live:null}; go('auth'); } }
   });
 }
 if('serviceWorker' in navigator && location.protocol === 'https:' && window.SPRINT_SW){ navigator.serviceWorker.register('sw.js').catch(() => {}); }
